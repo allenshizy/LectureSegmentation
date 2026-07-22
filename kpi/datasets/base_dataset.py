@@ -1,6 +1,7 @@
 import random
 from typing import Callable, Iterable
 from kpi.utils.video import Video, Srt
+from kpi.utils.text_label_dataset import filter_internal_boundaries
 
 
 class Dataset:
@@ -22,19 +23,13 @@ class Dataset:
             for vfn, sfn in zip(self.video_fns, self.srt_fns)
         ]
 
-        EPS = 1
-        for frag, v in zip(self.frags, self.videos):
-            if frag[0] > EPS:
-                frag.insert(0, 0)
-            else:
-                frag[0] = 0
-            if v.duration - frag[-1] < 2 * EPS:
-                frag[-1] = v.duration
-            else:
-                frag.append(v.duration)
-            assert frag[-1] == v.duration, (frag, v.duration)
+        # Keep only interior boundaries; start/end anchors are evaluation-time caps.
+        self.frags = [
+            filter_internal_boundaries(frag, duration=float(v.duration))
+            for frag, v in zip(self.frags, self.videos)
+        ]
 
-        frag_tot = sum(len(frag) - 1 for frag in self.frags)
+        frag_tot = sum(len(frag) + 1 for frag in self.frags)
         duration_tot = sum(v.duration for v in self.videos)
 
         if print_info:

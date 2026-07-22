@@ -1,10 +1,24 @@
+import shutil
+
 import ffmpeg
 from math import ceil
 from functools import cached_property
 
 
 def get_duration(video_fn):
-    return float(ffmpeg.probe(video_fn)["format"]["duration"])
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "ffmpeg executable was not found on PATH. Install ffmpeg and make sure the "
+            "ffmpeg command is available before running MITFLD training."
+        )
+
+    try:
+        return float(ffmpeg.probe(video_fn)["format"]["duration"])
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffmpeg executable was not found when probing video duration. "
+            "Install ffmpeg and add it to PATH."
+        ) from exc
 
 
 class Video:

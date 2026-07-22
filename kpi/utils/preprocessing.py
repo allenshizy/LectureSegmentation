@@ -1,46 +1,107 @@
 import glob
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import ffmpeg
 import librosa
 import numpy as np
-import spacy
-import torch
-import torchvision.models as models
 from PIL import Image
-from sentence_transformers import SentenceTransformer
-from torchvision import transforms
 from tqdm import tqdm
-from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, logging
 
 from kpi.utils.video import Video, get_duration
 
+
+def _configure_windows_cuda_dll_dirs() -> None:
+    if os.name != "nt":
+        return
+
+    candidates: list[Path] = []
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        candidates.append(Path(cuda_path) / "bin")
+
+    # Support CUDA runtime wheels installed in the project venv.
+    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
+    candidates.extend(
+        [
+            site_packages / "nvidia" / "cuda_runtime" / "bin",
+            site_packages / "nvidia" / "cublas" / "bin",
+            site_packages / "nvidia" / "cuda_nvrtc" / "bin",
+        ]
+    )
+
+    for path in candidates:
+        if path.exists():
+            os.add_dll_directory(str(path))
+
+
+_configure_windows_cuda_dll_dirs()
+
+import spacy
+import torch
+import torchvision.models as models
+from sentence_transformers import SentenceTransformer
+from torchvision import transforms
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model, logging
+
 logging.set_verbosity_error()
 
-spacy.require_gpu()  # type: ignore
+try:
+    spacy.require_gpu()  # type: ignore
+except Exception:
+    # Keep import-time startup robust if GPU libs are unavailable.
+    pass
 
 
 class LangModel:
-    def __init__(self, model_name: str, init_func):
+    def __init__(
+        self,
+        model_name: str,
+        init_func,
+        *,
+        device: str | None = None,
+        encode_kwargs: dict[str, Any] | None = None,
+    ):
         self.model_name = model_name
         self.init_func = init_func
+        self.device = device
+        self.encode_kwargs = encode_kwargs or {}
 
     @cached_property
     def model(self) -> Any:
-        return self.init_func(self.model_name)
+        model = self.init_func(self.model_name)
+        if self.device and hasattr(model, "to"):
+            try:
+                model = model.to(self.device)
+            except Exception:
+                # Keep model loading robust even if the backend rejects .to().
+                pass
+        return model
 
     def encode(self, text: str) -> np.ndarray:
-        return np.array(self.model.encode(text))
+        kwargs = dict(self.encode_kwargs)
+        if self.device and "device" not in kwargs:
+            kwargs["device"] = self.device
+        kwargs.setdefault("convert_to_numpy", True)
+        return np.asarray(self.model.encode(text, **kwargs))
 
     def pipe(self, *args, **kwargs) -> Any:
         return self.model.pipe(*args, **kwargs)
 
 
-SEN_MODEL = LangModel("distiluse-base-multilingual-cased", SentenceTransformer)
+SBERT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+SEN_MODEL = LangModel(
+    "distiluse-base-multilingual-cased",
+    lambda model_name: SentenceTransformer(model_name, device=SBERT_DEVICE),
+    device=SBERT_DEVICE,
+)
 WORD_MODEL = LangModel("en_core_web_lg", spacy.load)
 
 
@@ -147,13 +208,23 @@ def get_video_feature_clip(video: Video, method: str, **kwargs) -> Iterable[Clip
     if method == "fixed" and "duration" not in kwargs:
         return get_video_feature_clip(video, method="fixed", duration=10)
 
+    feature_keys = kwargs.pop("feature_keys", "tva")
+    if not set(feature_keys).issubset({"t", "v", "a"}):
+        raise ValueError(f"Unknown feature keys: {feature_keys}")
+
+    # Only compute requested modalities so text-only runs can skip video/audio IO.
+    visual_func = clip_visual_resnet152_1fps if "v" in feature_keys else None
+    text_func = clip_sentence_embedding if "t" in feature_keys else None
+    audio_func = clip_audio_wav2vec if "a" in feature_keys else None
+    merge_func = clip_merge_concat if len(feature_keys) > 1 else None
+
     return [
         get_clip_vec(
             clip,
-            visual_func=clip_visual_resnet152_1fps,
-            text_func=clip_sentence_embedding,
-            audio_func=clip_audio_wav2vec,
-            merge_func=clip_merge_concat,
+            visual_func=visual_func,
+            text_func=text_func,
+            audio_func=audio_func,
+            merge_func=merge_func,
         )
         for clip in tqdm(list(slice_video(video, method, **kwargs)))
     ]

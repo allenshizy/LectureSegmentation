@@ -1,2 +1,6 @@
 .venv/
-uv.lock
+artifacts/
+results/
+.vscode/
+__pycache__/
+notebooks/
