@@ -16,6 +16,7 @@ from kpi.utils.lstm_predict import (
     parse_requested_tokens,
 )
 from kpi.utils.logconfig import setup_logging
+from kpi.utils.text_label_dataset import filter_internal_boundaries
 from kpi.utils.stb_supervised import (
     load_processed_samples,
     probs_to_boundary_times_local_max,
@@ -38,6 +39,48 @@ def _boundary_times_to_sentence_indices(
                 indices.add(sent_idx)
                 break
     return sorted(indices)
+
+
+def _group_boundary_times_by_sentence(
+    sentence_ends: list[float],
+    boundary_times: list[float],
+    max_len: int,
+) -> dict[int, list[float]]:
+    grouped: dict[int, list[float]] = {}
+    capped_ends = sentence_ends[:max_len]
+    for boundary in boundary_times:
+        boundary_t = float(boundary)
+        for sent_idx, end_t in enumerate(capped_ends):
+            if boundary_t <= float(end_t):
+                grouped.setdefault(sent_idx, []).append(boundary_t)
+                break
+    return grouped
+
+
+def _format_sentence_document(
+    sample_id: str,
+    split_name: str,
+    sentences: list[str],
+    pred_times: list[float],
+    gt_times: list[float],
+    sentence_ends: list[float],
+    max_len: int,
+) -> str:
+    pred_by_sentence = _group_boundary_times_by_sentence(sentence_ends, pred_times, max_len)
+    gt_by_sentence = _group_boundary_times_by_sentence(sentence_ends, gt_times, max_len)
+
+    lines = [f"# {sample_id}", f"split: {split_name}", ""]
+    for idx, sentence in enumerate(sentences[:max_len], start=1):
+        parts = [f"{idx}. {sentence}"]
+        pred_label = ", ".join(f"P: {time:.3f}s" for time in pred_by_sentence.get(idx - 1, []))
+        gt_label = ", ".join(f"G: {time:.3f}s" for time in gt_by_sentence.get(idx - 1, []))
+        if pred_label:
+            parts.append(f"[{pred_label}]")
+        if gt_label:
+            parts.append(f"[{gt_label}]")
+        lines.append(" ".join(parts))
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _build_selected_samples(
@@ -178,8 +221,8 @@ def _resolve_manual_indices(
 @click.option("--batch_size", type=int, default=4)
 @click.option("--loglevel", type=str, default="DID", help="Logging level (e.g., DEBUG, INFO, WARNING, ERROR, CRITICAL).")
 @click.option("--save_prob_plots/--no-save_prob_plots", default=False, show_default=True)
-@click.option("--plot_dir", type=str, default="results/stb_probs", show_default=True)
-@click.option("--logpath", type=str, default=None, help="Optional log path for logging to file.")
+@click.option("--output_dir", type=str, default="results/stb_outputs", show_default=True)
+@click.option("--save_sentence_doc/--no-save_sentence_doc", default=False, show_default=True)
 
 def run_demo_stb_predict_experiment(
     dataset_path: str | None,
@@ -201,8 +244,8 @@ def run_demo_stb_predict_experiment(
     batch_size: int,
     loglevel: str,
     save_prob_plots: bool,
-    plot_dir: str,
-    logpath: str | None = None,  # Optional log path for logging to file
+    output_dir: str,
+    save_sentence_doc: bool,
 ):
     if bool(dataset_path) == bool(processed_dataset_path):
         raise click.BadParameter(
@@ -227,8 +270,11 @@ def run_demo_stb_predict_experiment(
         )
     if local_max_k < 0:
         raise click.BadParameter("local_max_k must be >= 0", param_hint="local_max_k")
+
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
     
-    setup_logging(loglevel, logpath)
+    setup_logging(loglevel, output_dir)
 
     print("Running STB segmentation prediction experiment with loaded checkpoint")
 
@@ -294,10 +340,6 @@ def run_demo_stb_predict_experiment(
     model = model.to(model_device)
     model.eval()
 
-    plot_root = Path(plot_dir)
-    if save_prob_plots:
-        plot_root.mkdir(parents=True, exist_ok=True)
-
     selected_samples = _build_selected_samples(
         dataset_path=dataset_path,
         processed_samples=processed_samples,
@@ -322,16 +364,23 @@ def run_demo_stb_predict_experiment(
             for local_idx, sample in enumerate(batch_samples):
                 sentence_times = [float(x) for x in sample["sentence_times"]]
                 duration = float(sample["duration"])
-                gt_times = [float(x) for x in sample["gt_times"]]
+                gt_times = filter_internal_boundaries(
+                    [float(x) for x in sample["gt_times"]],
+                    duration=duration,
+                )
                 cur_len = min(int(lengths[local_idx].item()), len(sentence_times))
                 cur_probs = [float(probs[local_idx, sent_idx].item()) for sent_idx in range(cur_len)]
 
-                pred_boundaries = probs_to_boundary_times_local_max(
+                pred_times = filter_internal_boundaries(
+                    probs_to_boundary_times_local_max(
                     probs=cur_probs,
                     sentence_ends=sentence_times[:cur_len],
                     threshold=decision_threshold,
                     k=local_max_k,
+                ),
+                    duration=duration,
                 )
+                pred_boundaries = pred_times
                 pred_boundaries = sorted({0.0, *pred_boundaries, duration})
 
                 if save_prob_plots:
@@ -341,8 +390,8 @@ def run_demo_stb_predict_experiment(
                         boundary_times=gt_times,
                         max_len=cur_len,
                     )
-                    sentence_plot_path = plot_root / f"{cur_id}_sentence.png"
-                    time_plot_path = plot_root / f"{cur_id}_time.png"
+                    sentence_plot_path = output_root / f"{cur_id}_sentence.png"
+                    time_plot_path = output_root / f"{cur_id}_time.png"
 
                     plot_probs_by_sentence(
                         probs=cur_probs,
@@ -360,6 +409,20 @@ def run_demo_stb_predict_experiment(
                         title=f"{cur_id} - probs vs time",
                         threshold=decision_threshold,
                     )
+
+                if save_sentence_doc:
+                    cur_id = str(sample["id"])
+                    doc_path = output_root / f"{cur_id}.md"
+                    doc_content = _format_sentence_document(
+                        sample_id=cur_id,
+                        split_name=str(sample["split"]),
+                        sentences=list(sample["text"]),
+                        pred_times=pred_times,
+                        gt_times=gt_times,
+                        sentence_ends=sentence_times[:cur_len],
+                        max_len=cur_len,
+                    )
+                    doc_path.write_text(doc_content, encoding="utf-8")
 
                 results.append(
                     {
@@ -381,7 +444,9 @@ def run_demo_stb_predict_experiment(
         print(f"  ground_truth: {format_fragments(result['ground_truth'])}")
 
     if save_prob_plots:
-        print(f"Saved probability plots to: {plot_root}")
+        print(f"Saved probability plots to: {output_root}")
+    if save_sentence_doc:
+        print(f"Saved sentence documents to: {output_root}")
 
 
 if __name__ == "__main__":
