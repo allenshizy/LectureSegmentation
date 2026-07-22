@@ -123,6 +123,9 @@ def _build_threshold_grid(min_value: float, max_value: float, step: float) -> li
 @click.option("--save_best/--no-save_best", default=True, show_default=True)
 @click.option("--save_last/--no-save_last", default=True, show_default=True)
 @click.option("--pos_weight_normalizer", type=float, default=1.0, show_default=True)
+@click.option("--freeze_encoder_epochs", type=int, default=None)
+@click.option("--freeze_transformer_epochs", type=int, default=None)
+@click.option("--freeze_detector_epochs", type=int, default=None)
 def run_supervised_training(
     dataset_path: str | None = None,
     processed_dataset_path: str | None = None,
@@ -158,6 +161,9 @@ def run_supervised_training(
     run_name: str | None = None,
     save_best: bool = True,
     save_last: bool = True,
+    freeze_encoder_epochs: int | None = None,
+    freeze_transformer_epochs: int | None = None,
+    freeze_detector_epochs: int | None = None,
 ) -> None:
     # create the dir if not exist
     output_root = Path(output_dir)
@@ -179,6 +185,15 @@ def run_supervised_training(
         raise click.BadParameter("Require 0 <= threshold_min <= threshold_max <= 1")
     if threshold_step <= 0:
         raise click.BadParameter("threshold_step must be > 0")
+
+    freeze_plan = {
+        "encoder": freeze_encoder_epochs,
+        "transformer": freeze_transformer_epochs,
+        "detector": freeze_detector_epochs,
+    }
+    for module_name, freeze_epochs in freeze_plan.items():
+        if freeze_epochs is not None and freeze_epochs < 0:
+            raise click.BadParameter(f"freeze_{module_name}_epochs must be >= 0")
 
     set_seed(seed)
     model_device = resolve_device(device)
@@ -251,6 +266,17 @@ def run_supervised_training(
     ).to(model_device)
     logger.info("Model config: %s", model.get_config())
 
+    freeze_log_entries: list[str] = []
+    for module_name, freeze_epochs in freeze_plan.items():
+        if freeze_epochs is not None and freeze_epochs > 0:
+            getattr(model, module_name).requires_grad_(False)
+            if freeze_epochs >= epochs:
+                freeze_log_entries.append(f"{module_name}:all {epochs} epochs")
+            else:
+                freeze_log_entries.append(f"{module_name}:first {freeze_epochs} epochs")
+    if freeze_log_entries:
+        logger.info("Freeze schedule -> %s", ", ".join(freeze_log_entries))
+
 
     # training setup
     pos_weight_value = compute_pos_weight(train_ds)
@@ -269,6 +295,16 @@ def run_supervised_training(
 
     # training loop
     for epoch_idx in range(1, epochs + 1):
+        for module_name, freeze_epochs in freeze_plan.items():
+            if (
+                freeze_epochs is not None
+                and freeze_epochs > 0
+                and freeze_epochs < epochs
+                and epoch_idx == freeze_epochs + 1
+            ):
+                getattr(model, module_name).requires_grad_(True)
+                logger.info("Unfroze %s at epoch %d", module_name, epoch_idx)
+
         train_stats = run_epoch(
             model=model,
             loader=train_loader,
@@ -432,6 +468,9 @@ def run_supervised_training(
             "encoder_weights_path": encoder_weights_path,
             "transformer_weights_path": transformer_weights_path,
             "detector_weights_path": detector_weights_path,
+            "freeze_encoder_epochs": freeze_encoder_epochs,
+            "freeze_transformer_epochs": freeze_transformer_epochs,
+            "freeze_detector_epochs": freeze_detector_epochs,
         },
     }
     summary_path = output_root / f"{run_stem}_summary.json"
