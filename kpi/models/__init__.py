@@ -8,6 +8,7 @@ from kpi.models.text_tiling import TextTiling
 from kpi.models.tw_finch import TWFinch
 from kpi.models.tw_finch_jvte import TWFinchJVTE
 from kpi.models.voice_activity_detector import VoiceActivityDetector
+from kpi.models.STB import BoundaryDetector, GlobalTransformer, LectureSegmentationModel, SentenceEncoder
 
 __all__ = [
     "EvenlyModel",
@@ -20,4 +21,8 @@ __all__ = [
     "BiLSTM",
     "BiLSTMJVTE",
     "LLMFrag",
+    "SentenceEncoder",
+    "GlobalTransformer",
+    "BoundaryDetector",
+    "LectureSegmentationModel",
 ]
