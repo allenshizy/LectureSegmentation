@@ -106,6 +106,12 @@ def _build_threshold_grid(min_value: float, max_value: float, step: float) -> li
 @click.option("--epochs", type=int, default=20, show_default=True)
 @click.option("--batch_size", type=int, default=4, show_default=True)
 @click.option("--lr", type=float, default=1e-4, show_default=True)
+@click.option(
+    "--transformer_lr",
+    type=float,
+    default=None,
+    help="Independent learning rate for GlobalTransformer. Defaults to --lr when omitted.",
+)
 @click.option("--weight_decay", type=float, default=1e-2, show_default=True)
 @click.option("--grad_clip_norm", type=float, default=1.0, show_default=True)
 @click.option("--boundary_threshold", type=float, default=0.5, show_default=True)
@@ -123,7 +129,6 @@ def _build_threshold_grid(min_value: float, max_value: float, step: float) -> li
 @click.option("--save_best/--no-save_best", default=True, show_default=True)
 @click.option("--save_last/--no-save_last", default=True, show_default=True)
 @click.option("--pos_weight_normalizer", type=float, default=1.0, show_default=True)
-@click.option("--freeze_encoder_epochs", type=int, default=None)
 @click.option("--freeze_transformer_epochs", type=int, default=None)
 @click.option("--freeze_detector_epochs", type=int, default=None)
 def run_supervised_training(
@@ -144,6 +149,7 @@ def run_supervised_training(
     epochs: int = 20,
     batch_size: int = 4,
     lr: float = 1e-4,
+    transformer_lr: float | None = None,
     pos_weight_normalizer: float = 1.0,
     weight_decay: float = 1e-2,
     grad_clip_norm: float = 1.0,
@@ -161,7 +167,6 @@ def run_supervised_training(
     run_name: str | None = None,
     save_best: bool = True,
     save_last: bool = True,
-    freeze_encoder_epochs: int | None = None,
     freeze_transformer_epochs: int | None = None,
     freeze_detector_epochs: int | None = None,
 ) -> None:
@@ -185,9 +190,10 @@ def run_supervised_training(
         raise click.BadParameter("Require 0 <= threshold_min <= threshold_max <= 1")
     if threshold_step <= 0:
         raise click.BadParameter("threshold_step must be > 0")
+    if transformer_lr is not None and transformer_lr <= 0:
+        raise click.BadParameter("transformer_lr must be > 0 when provided")
 
     freeze_plan = {
-        "encoder": freeze_encoder_epochs,
         "transformer": freeze_transformer_epochs,
         "detector": freeze_detector_epochs,
     }
@@ -264,7 +270,10 @@ def run_supervised_training(
         transformer_kwargs=transformer_kwargs_dict,
         detector_kwargs=detector_kwargs_dict,
     ).to(model_device)
+    # SentenceEncoder wraps SBERT inference and is fixed during supervised STB training.
+    model.encoder.requires_grad_(False)
     logger.info("Model config: %s", model.get_config())
+    logger.info("SentenceEncoder is fixed (requires_grad=False) for supervised training")
 
     freeze_log_entries: list[str] = []
     for module_name, freeze_epochs in freeze_plan.items():
@@ -285,7 +294,29 @@ def run_supervised_training(
     logger.info("Using BCE pos_weight=%.4f", pos_weight_value)
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    effective_transformer_lr = lr if transformer_lr is None else transformer_lr
+    param_groups = [
+        {
+            "name": "transformer",
+            "params": list(model.transformer.parameters()),
+            "lr": effective_transformer_lr,
+        },
+        {"name": "detector", "params": list(model.detector.parameters()), "lr": lr},
+    ]
+    optimizer = torch.optim.AdamW(
+        [{"params": group["params"], "lr": group["lr"]} for group in param_groups],
+        weight_decay=weight_decay,
+    )
+    for group in param_groups:
+        total_count = sum(param.numel() for param in group["params"])
+        trainable_count = sum(param.numel() for param in group["params"] if param.requires_grad)
+        logger.info(
+            "Optimizer group %s: lr=%.6g trainable=%d total=%d",
+            group["name"],
+            group["lr"],
+            trainable_count,
+            total_count,
+        )
 
     best_state = None
     best_val_loss = float("inf")
@@ -452,6 +483,8 @@ def run_supervised_training(
             "epochs": epochs,
             "batch_size": batch_size,
             "lr": lr,
+            "transformer_lr": transformer_lr,
+            "transformer_lr_effective": effective_transformer_lr,
             "weight_decay": weight_decay,
             "boundary_threshold_init": boundary_threshold,
             "threshold_min": threshold_min,
@@ -468,7 +501,7 @@ def run_supervised_training(
             "encoder_weights_path": encoder_weights_path,
             "transformer_weights_path": transformer_weights_path,
             "detector_weights_path": detector_weights_path,
-            "freeze_encoder_epochs": freeze_encoder_epochs,
+            "encoder_trainable": False,
             "freeze_transformer_epochs": freeze_transformer_epochs,
             "freeze_detector_epochs": freeze_detector_epochs,
         },
