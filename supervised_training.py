@@ -33,7 +33,7 @@ from kpi.utils.stb_supervised import (
 )
 from kpi.utils.logconfig import setup_logging
 
-from kpi.models.STB import LectureSegmentationModel
+from kpi.models.STB import LectureSegmentationModel, LinearBoundaryDetector
 
 SEED = 2024
 logger = logging.getLogger(__name__)
@@ -48,6 +48,22 @@ def _build_threshold_grid(min_value: float, max_value: float, step: float) -> li
     if not thresholds:
         thresholds = [float(min_value)]
     return thresholds
+
+
+def _save_model_parts(model: LectureSegmentationModel, target_dir: Path) -> dict[str, str]:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    encoder_path = target_dir / "encoder.pt"
+    transformer_path = target_dir / "transformer.pt"
+    detector_path = target_dir / "detector.pt"
+
+    model.encoder.save_checkpoint(encoder_path)
+    model.transformer.save_checkpoint(transformer_path)
+    model.detector.save_checkpoint(detector_path)
+    return {
+        "encoder": str(encoder_path),
+        "transformer": str(transformer_path),
+        "detector": str(detector_path),
+    }
 
 @click.command()
 @click.option(
@@ -129,6 +145,7 @@ def _build_threshold_grid(min_value: float, max_value: float, step: float) -> li
 @click.option("--save_best/--no-save_best", default=True, show_default=True)
 @click.option("--save_last/--no-save_last", default=True, show_default=True)
 @click.option("--pos_weight_normalizer", type=float, default=1.0, show_default=True)
+@click.option("--linear_probe/--no-linear_probe", default=False, show_default=True)
 @click.option("--freeze_transformer_epochs", type=int, default=None)
 @click.option("--freeze_detector_epochs", type=int, default=None)
 def run_supervised_training(
@@ -167,6 +184,7 @@ def run_supervised_training(
     run_name: str | None = None,
     save_best: bool = True,
     save_last: bool = True,
+    linear_probe: bool = False,
     freeze_transformer_epochs: int | None = None,
     freeze_detector_epochs: int | None = None,
 ) -> None:
@@ -193,9 +211,21 @@ def run_supervised_training(
     if transformer_lr is not None and transformer_lr <= 0:
         raise click.BadParameter("transformer_lr must be > 0 when provided")
 
+    if linear_probe:
+        if freeze_transformer_epochs is not None and freeze_transformer_epochs < epochs:
+            raise click.BadParameter(
+                "linear_probe requires transformer to remain frozen for all epochs; "
+                "set --freeze_transformer_epochs >= --epochs or omit it"
+            )
+        if freeze_detector_epochs is not None and freeze_detector_epochs > 0:
+            raise click.BadParameter("linear_probe requires detector to be trainable; set freeze_detector_epochs=0")
+
+    effective_freeze_transformer_epochs = epochs if linear_probe else freeze_transformer_epochs
+    effective_freeze_detector_epochs = freeze_detector_epochs
+
     freeze_plan = {
-        "transformer": freeze_transformer_epochs,
-        "detector": freeze_detector_epochs,
+        "transformer": effective_freeze_transformer_epochs,
+        "detector": effective_freeze_detector_epochs,
     }
     for module_name, freeze_epochs in freeze_plan.items():
         if freeze_epochs is not None and freeze_epochs < 0:
@@ -262,18 +292,35 @@ def run_supervised_training(
     )
 
     # model setup
-    model = LectureSegmentationModel(
-        encoder_checkpoint=encoder_weights_path,
-        transformer_checkpoint=transformer_weights_path,
-        detector_checkpoint=detector_weights_path,
-        encoder_kwargs=encoder_kwargs_dict,
-        transformer_kwargs=transformer_kwargs_dict,
-        detector_kwargs=detector_kwargs_dict,
-    ).to(model_device)
+    if linear_probe:
+        if detector_weights_path is None:
+            detector_module = LinearBoundaryDetector(**detector_kwargs_dict)
+        else:
+            detector_module = LinearBoundaryDetector.load_checkpoint(detector_weights_path)
+        model = LectureSegmentationModel(
+            encoder_checkpoint=encoder_weights_path,
+            transformer_checkpoint=transformer_weights_path,
+            detector=detector_module,
+            encoder_kwargs=encoder_kwargs_dict,
+            transformer_kwargs=transformer_kwargs_dict,
+        ).to(model_device)
+    else:
+        model = LectureSegmentationModel(
+            encoder_checkpoint=encoder_weights_path,
+            transformer_checkpoint=transformer_weights_path,
+            detector_checkpoint=detector_weights_path,
+            encoder_kwargs=encoder_kwargs_dict,
+            transformer_kwargs=transformer_kwargs_dict,
+            detector_kwargs=detector_kwargs_dict,
+        ).to(model_device)
     # SentenceEncoder wraps SBERT inference and is fixed during supervised STB training.
     model.encoder.requires_grad_(False)
+    if linear_probe:
+        model.transformer.requires_grad_(False)
     logger.info("Model config: %s", model.get_config())
     logger.info("SentenceEncoder is fixed (requires_grad=False) for supervised training")
+    if linear_probe:
+        logger.info("Linear probe mode enabled: transformer frozen, detector=%s", model.detector.__class__.__name__)
 
     freeze_log_entries: list[str] = []
     for module_name, freeze_epochs in freeze_plan.items():
@@ -295,14 +342,19 @@ def run_supervised_training(
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
     effective_transformer_lr = lr if transformer_lr is None else transformer_lr
-    param_groups = [
-        {
-            "name": "transformer",
-            "params": list(model.transformer.parameters()),
-            "lr": effective_transformer_lr,
-        },
-        {"name": "detector", "params": list(model.detector.parameters()), "lr": lr},
-    ]
+    if linear_probe:
+        param_groups = [
+            {"name": "detector", "params": list(model.detector.parameters()), "lr": lr},
+        ]
+    else:
+        param_groups = [
+            {
+                "name": "transformer",
+                "params": list(model.transformer.parameters()),
+                "lr": effective_transformer_lr,
+            },
+            {"name": "detector", "params": list(model.detector.parameters()), "lr": lr},
+        ]
     optimizer = torch.optim.AdamW(
         [{"params": group["params"], "lr": group["lr"]} for group in param_groups],
         weight_decay=weight_decay,
@@ -323,6 +375,8 @@ def run_supervised_training(
     best_val_f1 = float("-inf")
     best_epoch = 0
     history: list[dict[str, float | int]] = []
+    best_checkpoint_paths: dict[str, str] | None = None
+    last_checkpoint_paths: dict[str, str] | None = None
 
     # training loop
     for epoch_idx in range(1, epochs + 1):
@@ -374,17 +428,17 @@ def run_supervised_training(
             best_epoch = epoch_idx
             best_state = copy.deepcopy(model.state_dict())
             if save_best:
-                best_path = output_root / f"{run_stem}_best.pt"
-                model.save_checkpoint(best_path)
-                logger.info("Saved best checkpoint to %s", best_path)
+                best_dir = output_root / f"{run_stem}_best"
+                best_checkpoint_paths = _save_model_parts(model, best_dir)
+                logger.info("Saved best checkpoints to %s", best_dir)
 
     if best_state is not None:
         model.load_state_dict(best_state)
 
     if save_last:
-        last_path = output_root / f"{run_stem}_last.pt"
-        model.save_checkpoint(last_path)
-        logger.info("Saved last checkpoint to %s", last_path)
+        last_dir = output_root / f"{run_stem}_last"
+        last_checkpoint_paths = _save_model_parts(model, last_dir)
+        logger.info("Saved last checkpoints to %s", last_dir)
 
     threshold_candidates = _build_threshold_grid(
         min_value=threshold_min,
@@ -476,6 +530,8 @@ def run_supervised_training(
         "selected_boundary_threshold": selected_boundary_threshold,
         "threshold_sweep": threshold_sweep,
         "test_metrics": test_boundary_scores,
+        "best_checkpoints": best_checkpoint_paths,
+        "last_checkpoints": last_checkpoint_paths,
         "history": history,
         "options": {
             "dataset_path": dataset_path,
@@ -485,6 +541,7 @@ def run_supervised_training(
             "lr": lr,
             "transformer_lr": transformer_lr,
             "transformer_lr_effective": effective_transformer_lr,
+            "linear_probe": linear_probe,
             "weight_decay": weight_decay,
             "boundary_threshold_init": boundary_threshold,
             "threshold_min": threshold_min,
@@ -502,8 +559,8 @@ def run_supervised_training(
             "transformer_weights_path": transformer_weights_path,
             "detector_weights_path": detector_weights_path,
             "encoder_trainable": False,
-            "freeze_transformer_epochs": freeze_transformer_epochs,
-            "freeze_detector_epochs": freeze_detector_epochs,
+            "freeze_transformer_epochs": effective_freeze_transformer_epochs,
+            "freeze_detector_epochs": effective_freeze_detector_epochs,
         },
     }
     summary_path = output_root / f"{run_stem}_summary.json"

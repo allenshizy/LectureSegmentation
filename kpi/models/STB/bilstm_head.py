@@ -119,3 +119,64 @@ class BoundaryDetector(BaseModule):
         logger.debug("BoundaryDetector.forward output shape=%s", tuple(logits.shape))
         return logits
 
+
+class LinearBoundaryDetector(BaseModule):
+    """Linear boundary detector used for probing representation quality.
+
+    Input shape:
+        [batch, sequence_length, input_dim]
+
+    Output shape:
+        [batch, sequence_length, 1]
+    """
+
+    def __init__(
+        self,
+        input_dim: int = 384,
+        bias: bool = True,
+    ) -> None:
+        self.input_dim = input_dim
+        self.bias = bias
+        super().__init__(
+            {
+                "input_dim": input_dim,
+                "bias": bias,
+            }
+        )
+        logger.info(
+            "Initializing LinearBoundaryDetector(input_dim=%d, bias=%s)",
+            input_dim,
+            bias,
+        )
+        self.classifier = nn.Linear(input_dim, 1, bias=bias)
+
+    def get_config(self) -> dict[str, Any]:
+        return dict(self.config)
+
+    def forward(
+        self,
+        x: Tensor,
+        lengths: Tensor | list[int] | None = None,
+    ) -> Tensor:
+        squeeze_batch = x.ndim == 2
+        if squeeze_batch:
+            x = x.unsqueeze(0)
+        logger.debug(
+            "LinearBoundaryDetector.forward input shape=%s, lengths_provided=%s",
+            tuple(x.shape),
+            lengths is not None,
+        )
+
+        if lengths is not None and not torch.is_tensor(lengths):
+            lengths = torch.as_tensor(lengths, dtype=torch.long)
+
+        logits = self.classifier(x)
+        if lengths is not None:
+            padding_mask = lengths_to_padding_mask(lengths, x.size(1))
+            logits = logits.masked_fill(padding_mask.unsqueeze(-1), 0.0)
+
+        if squeeze_batch:
+            logits = logits.squeeze(0)
+        logger.debug("LinearBoundaryDetector.forward output shape=%s", tuple(logits.shape))
+        return logits
+
