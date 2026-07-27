@@ -188,11 +188,6 @@ def run_supervised_training(
     freeze_transformer_epochs: int | None = None,
     freeze_detector_epochs: int | None = None,
 ) -> None:
-    # create the dir if not exist
-    output_root = Path(output_dir)
-    output_root.mkdir(parents=True, exist_ok=True)
-
-    setup_logging(log_level, output_dir)
     validate_split_ratios(train_ratio, val_ratio, test_ratio)
 
     if bool(dataset_path) == bool(processed_dataset_path):
@@ -231,12 +226,18 @@ def run_supervised_training(
         if freeze_epochs is not None and freeze_epochs < 0:
             raise click.BadParameter(f"freeze_{module_name}_epochs must be >= 0")
 
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_stem = run_name or f"stb_mitfld_{timestamp}"
+
+    # Keep all run artifacts under one directory: output_dir/run_name
+    output_root = Path(output_dir) / run_stem
+    output_root.mkdir(parents=True, exist_ok=True)
+    log_path = setup_logging(log_level, str(output_root))
+
     set_seed(seed)
     model_device = resolve_device(device)
     logger.info("Using device: %s", model_device)
-
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_stem = run_name or f"stb_mitfld_{timestamp}"
+    logger.info("Run output directory: %s", output_root)
 
     encoder_kwargs_dict = parse_json_kwargs("encoder_kwargs", encoder_kwargs)
     transformer_kwargs_dict = parse_json_kwargs("transformer_kwargs", transformer_kwargs)
@@ -428,7 +429,7 @@ def run_supervised_training(
             best_epoch = epoch_idx
             best_state = copy.deepcopy(model.state_dict())
             if save_best:
-                best_dir = output_root / f"{run_stem}_best"
+                best_dir = output_root / "best"
                 best_checkpoint_paths = _save_model_parts(model, best_dir)
                 logger.info("Saved best checkpoints to %s", best_dir)
 
@@ -436,7 +437,7 @@ def run_supervised_training(
         model.load_state_dict(best_state)
 
     if save_last:
-        last_dir = output_root / f"{run_stem}_last"
+        last_dir = output_root / "last"
         last_checkpoint_paths = _save_model_parts(model, last_dir)
         logger.info("Saved last checkpoints to %s", last_dir)
 
@@ -534,6 +535,8 @@ def run_supervised_training(
         "last_checkpoints": last_checkpoint_paths,
         "history": history,
         "options": {
+            "output_dir": str(output_root),
+            "log_path": str(log_path),
             "dataset_path": dataset_path,
             "processed_dataset_path": processed_dataset_path,
             "epochs": epochs,
@@ -563,7 +566,7 @@ def run_supervised_training(
             "freeze_detector_epochs": effective_freeze_detector_epochs,
         },
     }
-    summary_path = output_root / f"{run_stem}_summary.json"
+    summary_path = output_root / "summary.json"
     with summary_path.open("w", encoding="utf-8") as fp:
         json.dump(summary, fp, indent=2, ensure_ascii=True)
     logger.info("Saved training summary to %s", summary_path)
