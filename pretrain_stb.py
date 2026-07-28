@@ -32,11 +32,12 @@ from pathlib import Path
 
 import click
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 
 from kpi.datasets.mitfld import MITFLD
 from kpi.models.STB import STBPretrainingModel
 from kpi.utils.logconfig import setup_logging
+from kpi.utils.processed_split import partition_processed_paths
 from kpi.utils.stb_pretrain import (
     LecturePretrainDataset,
     pretrain_collate_fn,
@@ -114,7 +115,10 @@ logger = logging.getLogger(__name__)
     default=0.1,
     show_default=True,
     type=float,
-    help="Fraction of data reserved for validation (0 to disable).",
+    help=(
+        "Validation switch only (0 disables validation). "
+        "When > 0, provide validation data via --processed_dataset_path using pre-split files."
+    ),
 )
 @click.option(
     "--mask_rate",
@@ -262,40 +266,48 @@ def main(
         )
 
     all_lectures: list[list[str]] = []
+    val_lectures: list[list[str]] = []
     if dataset_paths:
         logger.info("Loading %d raw dataset source(s)…", len(dataset_paths))
         all_datasets = [MITFLD(p) for p in dataset_paths]
         all_lectures.extend(LecturePretrainDataset.from_datasets(all_datasets).lectures)
 
     if processed_dataset_paths:
-        logger.info("Loading %d processed dataset source(s)…", len(processed_dataset_paths))
-        all_lectures.extend(
-            LecturePretrainDataset.from_processed_files(list(processed_dataset_paths)).lectures
+        train_processed_paths, val_processed_paths, test_processed_paths = partition_processed_paths(
+            list(processed_dataset_paths)
+        )
+        logger.info(
+            "Processed sources resolved: train=%d val=%d test=%d",
+            len(train_processed_paths),
+            len(val_processed_paths),
+            len(test_processed_paths),
         )
 
-    pretrain_ds = LecturePretrainDataset(all_lectures)
-    logger.info("Total lectures available for pre-training: %d", len(pretrain_ds))
+        if train_processed_paths:
+            all_lectures.extend(LecturePretrainDataset.from_processed_files(train_processed_paths).lectures)
+        if val_processed_paths:
+            val_lectures.extend(LecturePretrainDataset.from_processed_files(val_processed_paths).lectures)
 
-    if len(pretrain_ds) < 2:
+    if val_ratio > 0.0 and not val_lectures:
+        raise click.UsageError(
+            "val_ratio > 0 requires a pre-split validation file. "
+            "Pass a validation .pt via --processed_dataset_path (filename or payload split should indicate validation)."
+        )
+
+    train_ds = LecturePretrainDataset(all_lectures)
+    logger.info("Total lectures available for pre-training: %d", len(train_ds))
+
+    if len(train_ds) < 2:
         raise RuntimeError(
             "Pre-training dataset has fewer than 2 documents.  "
             "Check that the dataset path is correct and contains transcripts."
         )
 
-    # Optional validation split
-    if val_ratio > 0.0 and len(pretrain_ds) >= 4:
-        n_val = max(1, int(len(pretrain_ds) * val_ratio))
-        n_train = len(pretrain_ds) - n_val
-        train_ds, val_ds = random_split(
-            pretrain_ds,
-            [n_train, n_val],
-            generator=torch.Generator().manual_seed(seed),
-        )
-        logger.info("Train=%d  Val=%d", n_train, n_val)
+    val_ds = LecturePretrainDataset(val_lectures) if val_lectures else None
+    if val_ds is not None:
+        logger.info("Using pre-split validation set: Train=%d  Val=%d", len(train_ds), len(val_ds))
     else:
-        train_ds = pretrain_ds
-        val_ds = None
-        logger.info("No validation split (val_ratio=%.2f or dataset too small)", val_ratio)
+        logger.info("No validation set provided; training without validation")
 
     train_loader = DataLoader(
         train_ds,
