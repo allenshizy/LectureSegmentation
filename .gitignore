@@ -4,3 +4,4 @@ results/
 .vscode/
 __pycache__/
 notebooks/
+openphi_textbook/
