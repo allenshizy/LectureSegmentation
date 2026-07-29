@@ -22,7 +22,16 @@ class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 4096) -> None:
         super().__init__()
+        self.d_model = d_model
         self.dropout = nn.Dropout(dropout)
+
+        pe = self._build_pe(d_model=d_model, max_len=max_len)
+        self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
+
+    @staticmethod
+    def _build_pe(d_model: int, max_len: int) -> Tensor:
+        if max_len <= 0:
+            raise ValueError("max_len must be > 0")
 
         position = torch.arange(max_len, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(
@@ -31,9 +40,23 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, d_model, dtype=torch.float32)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
+        return pe
+
+    def _ensure_capacity(self, target_len: int) -> None:
+        current_len = int(self.pe.size(1))
+        if target_len <= current_len:
+            return
+
+        new_pe = self._build_pe(d_model=self.d_model, max_len=target_len).unsqueeze(0)
+        self.pe = new_pe.to(device=self.pe.device, dtype=self.pe.dtype)
+        logger.warning(
+            "Extended positional encoding from %d to %d steps to fit long sequence",
+            current_len,
+            target_len,
+        )
 
     def forward(self, x: Tensor) -> Tensor:
+        self._ensure_capacity(int(x.size(1)))
         x = x + self.pe[:, : x.size(1)]
         return self.dropout(x)
 
