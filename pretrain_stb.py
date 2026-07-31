@@ -177,6 +177,13 @@ logger = logging.getLogger(__name__)
     help="Torch device: 'auto', 'cuda', 'cpu', etc.",
 )
 @click.option(
+    "--use_amp",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Enable mixed-precision training (CUDA float16 or CPU bfloat16 when supported).",
+)
+@click.option(
     "--seed",
     default=2024,
     show_default=True,
@@ -238,6 +245,7 @@ def main(
     grad_clip_norm: float,
     num_workers: int,
     device: str,
+    use_amp: bool,
     seed: int,
     save_every: int,
     encoder_kwargs: str,
@@ -256,6 +264,12 @@ def main(
     enc_kw = parse_json_kwargs("encoder_kwargs", encoder_kwargs)
     tfm_kw = parse_json_kwargs("transformer_kwargs", transformer_kwargs)
     clip = grad_clip_norm if grad_clip_norm > 0 else None
+    amp_enabled = use_amp and dev.type in {"cuda", "cpu"}
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and dev.type == "cuda") if use_amp and dev.type == "cuda" else None
+    if amp_enabled:
+        logger.info("Mixed precision enabled on %s", dev)
+    else:
+        logger.info("Mixed precision disabled")
 
     # ------------------------------------------------------------------
     # Build dataset
@@ -375,6 +389,8 @@ def main(
             sop_weight=sop_weight,
             msr_weight=msr_weight,
             grad_clip_norm=clip,
+            use_amp=amp_enabled,
+            scaler=scaler,
         )
 
         row: dict = {"epoch": epoch, **{f"train_{k}": v for k, v in train_metrics.items()}}
@@ -389,6 +405,8 @@ def main(
                     sop_weight=sop_weight,
                     msr_weight=msr_weight,
                     fixed_seed=seed,
+                    use_amp=amp_enabled,
+                    scaler=None,
                 )
             row.update({f"val_{k}": v for k, v in val_metrics.items()})
 
