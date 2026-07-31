@@ -401,6 +401,11 @@ def run_supervised_training(
     history: list[dict[str, float | int]] = []
     best_checkpoint_paths: dict[str, str] | None = None
     last_checkpoint_paths: dict[str, str] | None = None
+    threshold_candidates = _build_threshold_grid(
+        min_value=threshold_min,
+        max_value=threshold_max,
+        step=threshold_step,
+    )
 
     # training loop
     for epoch_idx in range(1, epochs + 1):
@@ -431,30 +436,64 @@ def run_supervised_training(
                 optimizer=None,
             )
 
+        if using_processed_dataset:
+            (
+                epoch_boundary_threshold,
+                epoch_val_f1,
+                _,
+            ) = select_best_boundary_threshold_processed(
+                model=model,
+                loader=val_loader,
+                device=model_device,
+                threshold_candidates=threshold_candidates,
+                local_max_k=local_max_k,
+                f1_threshold=f1_threshold,
+            )
+        else:
+            (
+                epoch_boundary_threshold,
+                epoch_val_f1,
+                _,
+            ) = select_best_boundary_threshold(
+                model=model,
+                dataset_split=val_data,
+                loader=val_loader,
+                device=model_device,
+                threshold_candidates=threshold_candidates,
+                local_max_k=local_max_k,
+                f1_threshold=f1_threshold,
+            )
+
         history.append(
             {
                 "epoch": epoch_idx,
                 "train_loss": train_stats["loss"],
                 "val_loss": val_stats["loss"],
+                "val_f1": epoch_val_f1,
+                "val_boundary_threshold": epoch_boundary_threshold,
             }
         )
 
         logger.info(
-            "epoch=%d train_loss=%.6f val_loss=%.6f",
+            "epoch=%d train_loss=%.6f val_loss=%.6f val_f1=%.6f val_boundary_threshold=%.4f",
             epoch_idx,
             train_stats["loss"],
             val_stats["loss"],
+            epoch_val_f1,
+            epoch_boundary_threshold,
         )
 
-        if val_stats["loss"] < best_val_loss:
+        if epoch_val_f1 > best_val_f1 or (
+            epoch_val_f1 == best_val_f1 and val_stats["loss"] < best_val_loss
+        ):
             best_val_loss = val_stats["loss"]
-            best_val_f1 = float("nan")
+            best_val_f1 = epoch_val_f1
             best_epoch = epoch_idx
             best_state = copy.deepcopy(model.state_dict())
             if save_best:
                 best_dir = output_root / "best"
                 best_checkpoint_paths = _save_model_parts(model, best_dir)
-                logger.info("Saved best checkpoints to %s", best_dir)
+                logger.info("Saved best checkpoints by val_f1 to %s", best_dir)
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -464,11 +503,6 @@ def run_supervised_training(
         last_checkpoint_paths = _save_model_parts(model, last_dir)
         logger.info("Saved last checkpoints to %s", last_dir)
 
-    threshold_candidates = _build_threshold_grid(
-        min_value=threshold_min,
-        max_value=threshold_max,
-        step=threshold_step,
-    )
     logger.info(
         "Selecting boundary threshold on val split: min=%.3f max=%.3f step=%.3f (%d candidates)",
         threshold_min,

@@ -134,7 +134,7 @@ def _select_best_threshold_from_records(
     if not threshold_candidates:
         raise ValueError("threshold_candidates must not be empty")
 
-    logger.info(
+    logger.debug(
         "Running threshold sweep over %d candidates on %d records (local_max_k=%d, f1_threshold=%.4f)",
         len(threshold_candidates),
         len(records),
@@ -160,7 +160,7 @@ def _select_best_threshold_from_records(
             best_f1 = cur_f1
             best_threshold = float(threshold)
 
-    logger.info(
+    logger.debug(
         "Threshold sweep done: best_threshold=%.4f best_f1=%.6f",
         best_threshold,
         best_f1,
@@ -207,7 +207,7 @@ def select_best_boundary_threshold(
 ) -> tuple[float, float, list[dict[str, float]]]:
     """Select best threshold on raw split using one model pass and offline threshold sweep."""
 
-    logger.info("Selecting best boundary threshold on raw validation split")
+    logger.debug("Selecting best boundary threshold on raw validation split")
 
     records = _collect_raw_prob_records(
         model=model,
@@ -221,7 +221,7 @@ def select_best_boundary_threshold(
         local_max_k=local_max_k,
         f1_threshold=f1_threshold,
     )
-    logger.info(
+    logger.debug(
         "Raw validation threshold selection done: threshold=%.4f f1=%.6f",
         best_threshold,
         best_f1,
