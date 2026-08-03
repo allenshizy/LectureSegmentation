@@ -113,6 +113,13 @@ def _save_model_parts(model: LectureSegmentationModel, target_dir: Path) -> dict
     help="JSON string of keyword arguments for the BoundaryDetector.",
 )
 @click.option(
+    "--detector_mode",
+    type=click.Choice(["bilstm", "mlp"], case_sensitive=False),
+    default="bilstm",
+    show_default=True,
+    help="Select whether the detector uses the existing BiLSTM path or a pure MLP path.",
+)
+@click.option(
     "--log_level",
     type=str,
     default="DID",
@@ -161,6 +168,7 @@ def run_supervised_training(
     encoder_kwargs: str = "{}",
     transformer_kwargs: str = "{}",
     detector_kwargs: str = "{}",
+    detector_mode: str = "bilstm",
     log_level: str = "DID",
     seed: int = SEED,
     split_seed: int = SEED,
@@ -248,7 +256,7 @@ def run_supervised_training(
     encoder_kwargs_dict = parse_json_kwargs("encoder_kwargs", encoder_kwargs)
     transformer_kwargs_dict = parse_json_kwargs("transformer_kwargs", transformer_kwargs)
     detector_kwargs_dict = parse_json_kwargs("detector_kwargs", detector_kwargs)
-
+    detector_kwargs_dict.setdefault("use_mlp_only", detector_mode.lower() == "mlp")
 
     test_data = None
 

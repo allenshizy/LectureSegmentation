@@ -4,6 +4,7 @@ results/
 .vscode/
 __pycache__/
 notebooks/
+tests/
 openphi_textbook/
 ytseg_text_ref/
 processed_dataset/*
