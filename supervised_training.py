@@ -207,8 +207,8 @@ def run_supervised_training(
     if bool(dataset_path) == using_processed_dataset:
         raise click.BadParameter("Provide exactly one of --dataset_path or --processed_dataset_path")
 
-    if epochs <= 0:
-        raise click.BadParameter("epochs must be > 0")
+    if epochs < 0:
+        raise click.BadParameter("epochs must be >= 0")
     if batch_size <= 0:
         raise click.BadParameter("batch_size must be > 0")
     if local_max_k < 0:
@@ -415,6 +415,9 @@ def run_supervised_training(
         step=threshold_step,
     )
 
+    if epochs == 0:
+        logger.info("epochs=0: skipping training and running evaluation-only flow")
+
     # training loop
     for epoch_idx in range(1, epochs + 1):
         for module_name, freeze_epochs in freeze_plan.items():
@@ -505,6 +508,11 @@ def run_supervised_training(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+
+    if epochs == 0 and save_best:
+        best_dir = output_root / "best"
+        best_checkpoint_paths = _save_model_parts(model, best_dir)
+        logger.info("Saved best checkpoints for evaluation-only run to %s", best_dir)
 
     if save_last:
         last_dir = output_root / "last"
