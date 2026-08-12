@@ -23,6 +23,7 @@ dependencies = [
     "click>=8.1.7,<9",
     "matplotlib>=3.8,<4",
     "datasets>=5.0.1",
+    "openai>=1.45.0,<2",
 ]
 
 [project.optional-dependencies]
