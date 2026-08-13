@@ -26,7 +26,7 @@ class StbSegmenter:
         device = resolve_device(self.config.device)
         logger.info("Loading STB model checkpoints onto device=%s", device)
         model = LectureSegmentationModel(
-            encoder_checkpoint=self.config.encoder_checkpoint,
+            # encoder left as default: un-finetuned SBERT, fetched/cached from HuggingFace.
             transformer_checkpoint=self.config.transformer_checkpoint,
             detector_checkpoint=self.config.detector_checkpoint,
         )

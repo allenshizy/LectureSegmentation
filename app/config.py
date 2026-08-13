@@ -16,21 +16,23 @@ class WhisperConfig:
 
 @dataclass
 class STBConfig:
-    encoder_checkpoint: Path = REPO_ROOT / "artifacts/pretrained_mix_6layer_BiLSTM/best/encoder.pt"
-    transformer_checkpoint: Path = REPO_ROOT / "artifacts/pretrained_mix_6layer_BiLSTM/best/transformer.pt"
-    detector_checkpoint: Path = REPO_ROOT / "artifacts/pretrained_mix_6layer_BiLSTM/best/detector.pt"
+    # encoder is un-finetuned SBERT (all-MiniLM-L6-v2); rebuilt from HF, not checked into git.
+    transformer_checkpoint: Path = REPO_ROOT / "app/checkpoints/transformer.pt"
+    detector_checkpoint: Path = REPO_ROOT / "app/checkpoints/detector.pt"
     device: str = "auto"
-    threshold: float = 0.5
+    threshold: float = 0.75  # calibrated in artifacts/pretrained_mix_6layer_BiLSTM/summary.json
     local_max_window: int = 1  # +-k window used by local-max boundary decoding
 
 
 @dataclass
 class OllamaConfig:
-    model: str = "qwen2.5:7b"
+    model: str = "qwen3:1.7b"
     host: str = "127.0.0.1"
     port: int = 11434
     auto_start: bool = True
+    auto_pull: bool = True
     startup_timeout_s: float = 30.0
+    pull_timeout_s: float = 1800.0  # first pull can be a large download
     request_timeout_s: float = 120.0
 
     @property

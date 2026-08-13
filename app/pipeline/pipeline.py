@@ -18,6 +18,8 @@ class Chapter:
     end: float
     text: str
     title: str | None = None
+    keywords: list[str] | None = None
+    summary: str | None = None
 
 
 def _group_into_chapters(segments: list[Segment], boundary_times: list[float]) -> list[Chapter]:
@@ -55,17 +57,19 @@ class SegmentationPipeline:
         self.segmenter = StbSegmenter(self.config.stb)
         self.llm = OllamaClient(self.config.ollama)
 
-    def run(self, audio_path: str | Path, title_chapters: bool = True) -> list[Chapter]:
+    def run(self, audio_path: str | Path, describe_chapters: bool = True) -> list[Chapter]:
         segments = self.transcriber.transcribe(audio_path)
         boundary_times = self.segmenter.predict_boundaries(segments)
         chapters = _group_into_chapters(segments, boundary_times)
 
-        if title_chapters:
+        if describe_chapters:
             for chapter in chapters:
                 try:
-                    chapter.title = self.llm.title_chapter(chapter.text)
+                    described = self.llm.describe_chapter(chapter.text)
+                    chapter.title = described["title"]
+                    chapter.keywords = described["keywords"]
+                    chapter.summary = described["summary"]
                 except Exception:
-                    logger.exception("Failed to title chapter [%.1f, %.1f]", chapter.start, chapter.end)
-                    chapter.title = None
+                    logger.exception("Failed to describe chapter [%.1f, %.1f]", chapter.start, chapter.end)
 
         return chapters
