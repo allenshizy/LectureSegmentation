@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 import logging
 
 import torch
 from torch import nn
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from kpi.models.STB import BoundaryDetector, GlobalTransformer, LectureSegmentationModel, SentenceEncoder
 
@@ -14,8 +19,7 @@ from kpi.models.STB import BoundaryDetector, GlobalTransformer, LectureSegmentat
 def setup_logging() -> Path:
     """Configure root logging to both console and a local .log file."""
 
-    log_dir = Path(__file__).resolve().parent
-    log_path = log_dir / "train.log"
+    log_path = REPO_ROOT / "train.log"  # keep logs at repo root regardless of script location
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
