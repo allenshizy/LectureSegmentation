@@ -7,10 +7,4 @@ notebooks/
 tests/
 openphi_textbook/
 ytseg_text_ref/
-processed_dataset/*
-!processed_dataset/mitfld_split/
-!processed_dataset/mitfld_split/**
-!processed_dataset/openphi_textbook_merged_short/
-!processed_dataset/openphi_textbook_merged_short/**
-!processed_dataset/ytseg_text_ref_max3500/
-!processed_dataset/ytseg_text_ref_max3500/**
+processed_dataset/
