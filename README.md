@@ -61,7 +61,7 @@ uv run python run_app.py
 
 On first run this will automatically:
 - Start `ollama serve` if it isn't already running.
-- Pull the default small model (`qwen3:1.7b`, ~1.4GB) if you don't have it yet.
+- Pull the default Qwen model (`qwen3:4b`, ~2.6GB) if you don't have it yet.
 - Download and cache the `all-MiniLM-L6-v2` sentence encoder (~90MB) and the `faster-whisper` "small" ASR model (~500MB).
 
 All of this requires internet access **only on first run** and can take several minutes depending

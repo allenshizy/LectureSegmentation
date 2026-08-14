@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import torch
 
@@ -25,6 +26,7 @@ class StbSegmenter:
             return self._model
         device = resolve_device(self.config.device)
         logger.info("Loading STB model checkpoints onto device=%s", device)
+        started_at = time.perf_counter()
         model = LectureSegmentationModel(
             # encoder left as default: un-finetuned SBERT, fetched/cached from HuggingFace.
             transformer_checkpoint=self.config.transformer_checkpoint,
@@ -34,6 +36,7 @@ class StbSegmenter:
         model.eval()
         self._model = model
         self._device = device
+        logger.info("STB model is ready after %.1fs", time.perf_counter() - started_at)
         return model
 
     @torch.no_grad()
@@ -43,6 +46,8 @@ class StbSegmenter:
         if not segments:
             return []
 
+        logger.info("STB boundary prediction started for %d ASR segments", len(segments))
+        started_at = time.perf_counter()
         model = self._load_model()
         sentences = [seg.text for seg in segments]
         sentence_ends = [seg.end for seg in segments]
@@ -56,5 +61,10 @@ class StbSegmenter:
             threshold=self.config.threshold,
             k=self.config.local_max_window,
         )
-        logger.info("Predicted %d boundaries out of %d segments", len(boundary_times), len(segments))
+        logger.info(
+            "STB boundary prediction finished: %d boundaries from %d segments in %.1fs",
+            len(boundary_times),
+            len(segments),
+            time.perf_counter() - started_at,
+        )
         return boundary_times

@@ -32,6 +32,7 @@ gpu = [
 ]
 app = [
     "gradio>=4.44.0,<5",
+    "fastapi>=0.112.2,<0.113",
     "faster-whisper>=1.0.3,<2",
     "requests>=2.31.0,<3",
 ]

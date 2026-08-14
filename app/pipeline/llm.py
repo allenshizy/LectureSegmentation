@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import socket
 import subprocess
@@ -12,6 +13,14 @@ import requests
 from app.config import OllamaConfig
 
 logger = logging.getLogger(__name__)
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks some models emit despite think:false."""
+
+    return _THINK_BLOCK_RE.sub("", text).strip()
 
 
 class OllamaManager:
@@ -68,6 +77,7 @@ class OllamaManager:
         if not self.config.auto_pull:
             return
         if self._has_model():
+            logger.info("Ollama model %s is already available", self.config.model)
             return
 
         logger.info("Pulling ollama model %s (this may take a while on first run)", self.config.model)
@@ -94,7 +104,14 @@ class OllamaClient:
 
     def generate(self, prompt: str, *, json_mode: bool = False) -> str:
         self.manager.ensure_running()
-        payload: dict = {"model": self.config.model, "prompt": prompt, "stream": False}
+        logger.info("Sending chapter description request to Ollama model %s", self.config.model)
+        started_at = time.monotonic()
+        payload: dict = {
+            "model": self.config.model,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+        }
         if json_mode:
             payload["format"] = "json"
         response = requests.post(
@@ -103,7 +120,8 @@ class OllamaClient:
             timeout=self.config.request_timeout_s,
         )
         response.raise_for_status()
-        return response.json()["response"].strip()
+        logger.info("Ollama response received in %.1fs", time.monotonic() - started_at)
+        return _strip_thinking(response.json()["response"])
 
     def describe_chapter(self, chapter_text: str) -> dict:
         """Return {"title": str, "keywords": list[str], "summary": str} for a chapter."""
@@ -116,19 +134,46 @@ class OllamaClient:
             '- "summary": a one-line summary (<= 25 words)\n\n'
             f"Transcript:\n{chapter_text}"
         )
-        raw = self.generate(prompt, json_mode=True)
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse LLM JSON response: %r", raw)
-            return {"title": None, "keywords": [], "summary": None}
+        for attempt in range(1, 3):
+            raw = self.generate(prompt, json_mode=True)
+            try:
+                description = self._parse_chapter_description(raw)
+            except ValueError as exc:
+                logger.warning("Invalid Qwen chapter description (attempt %d/2): %s", attempt, exc)
+                continue
+            return description
+        raise RuntimeError("Qwen returned invalid title, keywords, or summary twice")
 
-        keywords = parsed.get("keywords") or []
+    @staticmethod
+    def _parse_chapter_description(raw: str) -> dict:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("response was not valid JSON") from exc
+
+        title = str(parsed.get("title") or "").strip()
+        summary = str(parsed.get("summary") or "").strip()
+        keywords = parsed.get("keywords")
         if not isinstance(keywords, list):
-            keywords = [str(keywords)]
-        return {
-            "title": parsed.get("title"),
-            "keywords": [str(k).strip() for k in keywords],
-            "summary": parsed.get("summary"),
-        }
+            raise ValueError("keywords was not a JSON list")
+        cleaned_keywords = [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+        if not title or not summary or not cleaned_keywords:
+            raise ValueError("response omitted title, summary, or keywords")
+        return {"title": title, "keywords": cleaned_keywords, "summary": summary}
+
+    def summarize_course(self, chapter_summaries: list[str]) -> str:
+        """Return a short course-level overview based on the chapter summaries."""
+
+        prompt = (
+            "You are summarizing a lecture from its chapter summaries. Respond with only a concise "
+            "two-paragraph plain-text overview. First state what kind of video/course this is. Then "
+            "state the main topics covered in their approximate order. Do not mention that you were "
+            "given chapter summaries.\n\n"
+            "Chapter summaries:\n"
+            + "\n".join(f"{index}. {summary}" for index, summary in enumerate(chapter_summaries, start=1))
+        )
+        return self.generate(prompt)
 

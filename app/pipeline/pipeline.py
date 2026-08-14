@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,13 @@ class Chapter:
     title: str | None = None
     keywords: list[str] | None = None
     summary: str | None = None
+    description_error: str | None = None
+
+
+@dataclass
+class PipelineResult:
+    chapters: list[Chapter]
+    course_summary: str | None = None
 
 
 def _group_into_chapters(segments: list[Segment], boundary_times: list[float]) -> list[Chapter]:
@@ -57,19 +65,38 @@ class SegmentationPipeline:
         self.segmenter = StbSegmenter(self.config.stb)
         self.llm = OllamaClient(self.config.ollama)
 
-    def run(self, audio_path: str | Path, describe_chapters: bool = True) -> list[Chapter]:
+    def run(self, audio_path: str | Path, describe_chapters: bool = True) -> PipelineResult:
+        logger.info("Segmentation pipeline started for %s", audio_path)
+        started_at = time.perf_counter()
         segments = self.transcriber.transcribe(audio_path)
         boundary_times = self.segmenter.predict_boundaries(segments)
         chapters = _group_into_chapters(segments, boundary_times)
+        logger.info("Grouped %d segments into %d chapters", len(segments), len(chapters))
 
+        course_summary = None
         if describe_chapters:
-            for chapter in chapters:
+            logger.info("Qwen chapter descriptions started for %d chapters", len(chapters))
+            for chapter_index, chapter in enumerate(chapters, start=1):
                 try:
+                    logger.info("Describing chapter %d/%d", chapter_index, len(chapters))
                     described = self.llm.describe_chapter(chapter.text)
                     chapter.title = described["title"]
                     chapter.keywords = described["keywords"]
                     chapter.summary = described["summary"]
-                except Exception:
+                except Exception as exc:
+                    chapter.description_error = str(exc)
                     logger.exception("Failed to describe chapter [%.1f, %.1f]", chapter.start, chapter.end)
 
-        return chapters
+            successful_summaries = [chapter.summary for chapter in chapters if chapter.summary]
+            if successful_summaries:
+                try:
+                    logger.info("Generating course overview from %d chapter summaries", len(successful_summaries))
+                    course_summary = self.llm.summarize_course(successful_summaries)
+                    logger.info("Course overview generated")
+                except Exception:
+                    logger.exception("Failed to generate course overview")
+            else:
+                logger.warning("Skipping course overview because no chapter summaries were generated")
+
+            logger.info("Segmentation pipeline finished in %.1fs", time.perf_counter() - started_at)
+        return PipelineResult(chapters=chapters, course_summary=course_summary)

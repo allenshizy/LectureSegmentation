@@ -9,3 +9,4 @@ openphi_textbook/
 ytseg_text_ref/
 processed_dataset/
 .pytest_cache/
+train.log

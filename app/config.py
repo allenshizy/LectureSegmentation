@@ -26,7 +26,7 @@ class STBConfig:
 
 @dataclass
 class OllamaConfig:
-    model: str = "qwen3:1.7b"
+    model: str = "qwen3:4b"
     host: str = "127.0.0.1"
     port: int = 11434
     auto_start: bool = True
