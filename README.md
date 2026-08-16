@@ -3,7 +3,7 @@
 # running guide
 - The pytorch version used in this project do not support blackwell GPU.
 
-> 如果要复现实验或者对代码进行修改，请看这个进阶版的 README: [ARCHITECTURE.md](ARCHITECTURE.md)（仓库架构说明 + 各训练/实验脚本的复现步骤）。
+> For rerunning the experiment or edit the model, please refer to this detailed README: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Setup
 
