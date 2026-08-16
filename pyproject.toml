@@ -22,10 +22,18 @@ dependencies = [
     "librosa>=0.10.1,<0.11",
     "click>=8.1.7,<9",
     "matplotlib>=3.8,<4",
+    "datasets>=5.0.1",
+    "openai>=1.45.0,<2",
 ]
 
 [project.optional-dependencies]
 gpu = [
     "cupy-cuda12x>=13.0.0,<14; python_version < '3.14'",
+]
+app = [
+    "gradio>=4.44.0,<5",
+    "fastapi>=0.112.2,<0.113",
+    "faster-whisper>=1.0.3,<2",
+    "requests>=2.31.0,<3",
 ]
 

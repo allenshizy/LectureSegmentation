@@ -69,6 +69,14 @@ def run_epoch(
     is_train = optimizer is not None
     model.train(is_train)
     mode = "train" if is_train else "eval"
+    total_params = sum(param.numel() for param in model.parameters())
+    trainable_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
+    logger.info(
+        "%s epoch trainable params: %d / %d",
+        mode,
+        trainable_params,
+        total_params,
+    )
     logger.debug("Starting %s epoch over %d batches", mode, len(loader))
 
     total_loss = 0.0

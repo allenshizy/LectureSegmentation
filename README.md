@@ -1,93 +1,96 @@
-# MA Zhaoyi Shi
+## MA-Zhaoyi Shi
 
+# running guide
+- The pytorch version used in this project do not support blackwell GPU.
 
+> 如果要复现实验或者对代码进行修改，请看这个进阶版的 README: [ARCHITECTURE.md](ARCHITECTURE.md)（仓库架构说明 + 各训练/实验脚本的复现步骤）。
 
-## Getting started
+## Setup
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Most dependencies are managed by `uv` (Python). A handful of things must be installed at the
+system level first, outside of Python: **ffmpeg**, **ollama** (only needed for the demo app),
+and **uv** itself (bootstrapped via `pip`).
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### 1. System-level dependencies
 
-## Add your files
+Run the setup script for your OS (safe to re-run; it skips anything already installed):
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+- Windows (PowerShell): `.\setup.ps1`
+- Linux / macOS: `bash setup.sh`
 
+Or install manually:
+
+**Linux (apt-based, e.g. Ubuntu/Debian):**
+```bash
+sudo apt-get update && sudo apt-get install -y ffmpeg
+curl -fsSL https://ollama.com/install.sh | sh
+pip install uv   # if pip itself is missing: python3 -m ensurepip --upgrade
 ```
-cd existing_repo
-git remote add origin https://git.rwth-aachen.de/learntech-lufgi9/bama/ma-zhaoyi-shi.git
-git branch -M main
-git push -uf origin main
+
+**macOS:**
+```bash
+brew install ffmpeg
+brew install ollama          # or: curl -fsSL https://ollama.com/install.sh | sh
+pip install uv
 ```
 
-## Integrate with your tools
+**Windows (PowerShell):**
+```powershell
+winget install --id Gyan.FFmpeg -e
+winget install --id Ollama.Ollama -e
+pip install uv               # if pip is missing: python -m ensurepip --upgrade
+```
 
-* [Set up project integrations](https://git.rwth-aachen.de/learntech-lufgi9/bama/ma-zhaoyi-shi/-/settings/integrations)
+### 2. Python dependencies (uv)
 
-## Collaborate with your team
+This repo runs fine on CPU; GPU is optional and only needed to reproduce accelerated training.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```bash
+uv sync                  # base deps (CPU-only, no GPU required)
+uv sync --extra app      # + gradio/faster-whisper, needed to run the Gradio demo app
+uv sync --extra gpu      # + cupy-cuda12x, only needed to reproduce GPU-accelerated training
+```
 
-## Test and Deploy
+Extras can be combined, e.g. `uv sync --extra app --extra gpu`.
 
-Use the built-in continuous integration in GitLab.
+### 3. First run of the demo app (Whisper + STB + Qwen/Ollama)
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```bash
+uv run python run_app.py
+```
 
-***
+On first run this will automatically:
+- Start `ollama serve` if it isn't already running.
+- Pull the default Qwen model (`qwen3:4b`, ~2.6GB) if you don't have it yet.
+- Download and cache the `all-MiniLM-L6-v2` sentence encoder (~90MB) and the `faster-whisper` "small" ASR model (~500MB).
 
-# Editing this README
+All of this requires internet access **only on first run** and can take several minutes depending
+on your connection; everything is cached afterwards (`~/.ollama`, `~/.cache/huggingface`). The
+trained STB checkpoints (`transformer.pt`, `detector.pt`) already ship in [app/checkpoints/](app/checkpoints/),
+so no extra download/training is needed for segmentation itself.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Open the printed local URL, paste a local audio/video file path, and run the pipeline.
 
-## Suggestions for a good README
+### 4. Cleanup
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+**Repo-internal** (removes `.venv`, `__pycache__`, `.pytest_cache` — safe/reversible, just `uv sync` again):
+- Windows: `.\clean.ps1`
+- Linux/macOS: `bash clean.sh`
 
-## Name
-Choose a self-explaining name for your project.
+**System-level** (only if you want to fully remove things from your machine):
+```bash
+# Linux (apt)
+sudo apt-get remove -y ffmpeg
+pip uninstall uv
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+# macOS (brew)
+brew uninstall ffmpeg ollama
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+# Windows
+winget uninstall Gyan.FFmpeg
+winget uninstall Ollama.Ollama
+pip uninstall uv
+```
+Ollama's downloaded models and caches live outside the repo in your user profile
+(`~/.ollama` on Linux/macOS, `%USERPROFILE%\.ollama` on Windows) — remove that directory too if
+you want to reclaim the disk space from pulled models.
