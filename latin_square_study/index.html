@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lecture Segmentation Study</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <p class="eyebrow">Lecture segmentation study</p>
+        <h1>Concept-finding tasks</h1>
+        <p id="status-text" class="status-text">Preparing study materials.</p>
+      </header>
+
+      <section id="loading-view" class="setup-view" aria-live="polite">
+        <h2>Preparing your study</h2>
+        <p id="loading-message" class="setup-copy">Loading the assigned materials.</p>
+      </section>
+
+      <section id="study-view" class="hidden" aria-live="polite">
+        <nav id="progress-nav" class="progress-nav" aria-label="Study progress"></nav>
+        <section id="task-view"></section>
+        <section id="feedback-view" class="hidden"></section>
+      </section>
+    </main>
+
+    <template id="task-template">
+      <article class="task-page">
+        <div class="task-heading">
+          <div>
+            <p class="eyebrow task-number"></p>
+            <h2 class="task-title"></h2>
+          </div>
+          <a class="video-link hidden" target="_blank" rel="noopener noreferrer">Open video</a>
+        </div>
+        <div class="prompt-band">
+          <p class="prompt-label">Your task</p>
+          <p class="task-prompt"></p>
+        </div>
+        <p class="selection-note">Select every segment that you think fully explains the concept in the task. You may select more than one.</p>
+        <div class="chapter-list"></div>
+        <div class="task-actions">
+          <p class="selection-count"></p>
+          <button class="primary-button finish-task-button" type="button">Confirm selections and continue</button>
+        </div>
+      </article>
+    </template>
+
+    <template id="chapter-template">
+      <article class="chapter-row">
+        <label class="select-control">
+          <input class="chapter-select" type="checkbox" />
+          <span>Select</span>
+        </label>
+        <div class="chapter-body">
+          <p class="chapter-time"></p>
+          <h3 class="chapter-title"></h3>
+          <div class="chapter-details">
+            <details data-section="keywords">
+              <summary>Keywords</summary>
+              <p class="keywords"></p>
+            </details>
+            <details data-section="summary">
+              <summary>Summary</summary>
+              <p class="chapter-summary"></p>
+            </details>
+            <details data-section="transcript">
+              <summary>Transcript</summary>
+              <p class="transcript"></p>
+            </details>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <template id="feedback-template">
+      <article class="feedback-page">
+        <p class="eyebrow">Final page</p>
+        <h2>Study feedback</h2>
+        <form id="feedback-form">
+          <fieldset>
+            <legend>How difficult did the tasks feel overall?</legend>
+            <div class="option-grid" data-name="overall_difficulty">
+              <label><input type="radio" name="overall_difficulty" value="very_easy" required /> Very easy</label>
+              <label><input type="radio" name="overall_difficulty" value="easy" /> Easy</label>
+              <label><input type="radio" name="overall_difficulty" value="moderate" /> Moderate</label>
+              <label><input type="radio" name="overall_difficulty" value="difficult" /> Difficult</label>
+              <label><input type="radio" name="overall_difficulty" value="very_difficult" /> Very difficult</label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Which task was easiest to complete?</legend>
+            <div id="easiest-task-options" class="option-grid"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Which information helped you most?</legend>
+            <div class="option-grid" data-name="most_helpful_information">
+              <label><input type="radio" name="most_helpful_information" value="title" required /> Title</label>
+              <label><input type="radio" name="most_helpful_information" value="keywords" /> Keywords</label>
+              <label><input type="radio" name="most_helpful_information" value="summary" /> Summary</label>
+              <label><input type="radio" name="most_helpful_information" value="transcript" /> Transcript</label>
+              <label><input type="radio" name="most_helpful_information" value="combination" /> A combination</label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Did you watch any of the videos?</legend>
+            <div class="option-grid" data-name="watched_videos">
+              <label><input type="radio" name="watched_videos" value="yes" required /> Yes</label>
+              <label><input type="radio" name="watched_videos" value="no" /> No</label>
+            </div>
+          </fieldset>
+          <fieldset id="video-helpfulness-fieldset" class="hidden">
+            <legend>How helpful were the videos?</legend>
+            <div class="option-grid">
+              <label><input type="radio" name="video_helpfulness" value="not_helpful" /> Not helpful</label>
+              <label><input type="radio" name="video_helpfulness" value="slightly_helpful" /> Slightly helpful</label>
+              <label><input type="radio" name="video_helpfulness" value="moderately_helpful" /> Moderately helpful</label>
+              <label><input type="radio" name="video_helpfulness" value="very_helpful" /> Very helpful</label>
+            </div>
+          </fieldset>
+          <label class="comment-field">
+            <span>Additional comments (optional)</span>
+            <textarea name="comments" rows="5" placeholder="Anything else you would like to share?"></textarea>
+          </label>
+          <button class="primary-button" type="submit">Finish and download response</button>
+        </form>
+      </article>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>

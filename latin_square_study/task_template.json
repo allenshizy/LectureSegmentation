@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "study_title": "Lecture segmentation concept-finding study",
+  "tasks": [
+    {
+      "id": "task_1",
+      "video_id": "REPLACE_WITH_FIRST_VIDEO_ID",
+      "material_file": "materials/participant_1_video_1.json",
+      "title": "Task 1",
+      "prompt": "Replace this text with the concept or question that the participant should locate in the lecture segments.",
+      "video_url": "",
+      "video_label": "Open video"
+    },
+    {
+      "id": "task_2",
+      "video_id": "REPLACE_WITH_SECOND_VIDEO_ID",
+      "material_file": "materials/participant_1_video_2.json",
+      "title": "Task 2",
+      "prompt": "Replace this text with the concept or question that the participant should locate in the lecture segments.",
+      "video_url": "",
+      "video_label": "Open video"
+    },
+    {
+      "id": "task_3",
+      "video_id": "REPLACE_WITH_THIRD_VIDEO_ID",
+      "material_file": "materials/participant_1_video_3.json",
+      "title": "Task 3",
+      "prompt": "Replace this text with the concept or question that the participant should locate in the lecture segments.",
+      "video_url": "",
+      "video_label": "Open video"
+    }
+  ]
+}

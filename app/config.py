@@ -33,6 +33,7 @@ class OllamaConfig:
     auto_pull: bool = True
     startup_timeout_s: float = 30.0
     pull_timeout_s: float = 1800.0  # first pull can be a large download
+    tags_timeout_s: float = 15.0
     request_timeout_s: float = 120.0
 
     @property

@@ -15,12 +15,19 @@ from app.config import OllamaConfig
 logger = logging.getLogger(__name__)
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_SPECIAL_THINK_BLOCK_RE = re.compile(r"<\|(?:think|thinking)\|>.*?<\|end(?:_of)?_think\|>", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_thinking(text: str) -> str:
-    """Remove <think>...</think> blocks some models emit despite think:false."""
+    """Remove complete or malformed thinking blocks some models emit despite think:false."""
 
-    return _THINK_BLOCK_RE.sub("", text).strip()
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _SPECIAL_THINK_BLOCK_RE.sub("", cleaned)
+    if "</think>" in cleaned.lower():
+        closing_tag = re.search(r"</think>", cleaned, re.IGNORECASE)
+        assert closing_tag is not None
+        cleaned = cleaned[closing_tag.end() :]
+    return cleaned.strip()
 
 
 class OllamaManager:
@@ -29,6 +36,7 @@ class OllamaManager:
     def __init__(self, config: OllamaConfig | None = None) -> None:
         self.config = config or OllamaConfig()
         self._proc: subprocess.Popen | None = None
+        self._ready = False
 
     def _is_up(self) -> bool:
         try:
@@ -38,9 +46,12 @@ class OllamaManager:
             return False
 
     def ensure_running(self) -> None:
+        if self._ready:
+            return
         if not self._is_up():
             self._start_server()
         self._ensure_model_pulled()
+        self._ready = True
 
     def _start_server(self) -> None:
         if not self.config.auto_start:
@@ -66,7 +77,16 @@ class OllamaManager:
         raise RuntimeError(f"Timed out waiting for ollama serve to become reachable at {self.config.base_url}")
 
     def _has_model(self) -> bool:
-        response = requests.get(f"{self.config.base_url}/api/tags", timeout=5.0)
+        try:
+            response = requests.get(
+                f"{self.config.base_url}/api/tags",
+                timeout=self.config.tags_timeout_s,
+            )
+        except requests.Timeout as exc:
+            raise RuntimeError(
+                f"Ollama did not answer /api/tags within {self.config.tags_timeout_s:.0f}s. "
+                "It may be busy loading the model or under CPU/memory pressure."
+            ) from exc
         response.raise_for_status()
         tags = {entry["name"] for entry in response.json().get("models", [])}
         # Ollama tags are "name:tag"; accept an exact match or a bare-name match with default "latest".
@@ -93,6 +113,7 @@ class OllamaManager:
         if self._proc is not None and self._proc.poll() is None:
             self._proc.terminate()
         self._proc = None
+        self._ready = False
 
 
 class OllamaClient:
@@ -114,11 +135,16 @@ class OllamaClient:
         }
         if json_mode:
             payload["format"] = "json"
-        response = requests.post(
-            f"{self.config.base_url}/api/generate",
-            json=payload,
-            timeout=self.config.request_timeout_s,
-        )
+        try:
+            response = requests.post(
+                f"{self.config.base_url}/api/generate",
+                json=payload,
+                timeout=self.config.request_timeout_s,
+            )
+        except requests.Timeout as exc:
+            raise RuntimeError(
+                f"Ollama generation timed out after {self.config.request_timeout_s:.0f}s."
+            ) from exc
         response.raise_for_status()
         logger.info("Ollama response received in %.1fs", time.monotonic() - started_at)
         return _strip_thinking(response.json()["response"])
