@@ -69,7 +69,7 @@ on your connection; everything is cached afterwards (`~/.ollama`, `~/.cache/hugg
 trained STB checkpoints (`transformer.pt`, `detector.pt`) already ship in [app/checkpoints/](app/checkpoints/),
 so no extra download/training is needed for segmentation itself.
 
-Open the printed local URL, paste a local audio/video file path, and run the pipeline.
+Open the printed local URL(By default it's 127.0.0.1:7860. If the cli is not giving results, sometimes it's just lagging, you can just enter the url), paste a local audio/video file path, and run the pipeline.
 
 ### 4. Cleanup
 
