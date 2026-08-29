@@ -70,3 +70,37 @@ class WhisperTranscriber:
             time.perf_counter() - started_at,
         )
         return result
+
+    @staticmethod
+    def segments_from_text(text: str, duration: float) -> list[Segment]:
+        """Convert plain text into segments for cases where subtitles are already available.
+        
+        Splits text into sentences and distributes them proportionally across the duration.
+        """
+        logger.info("Creating segments from pre-existing subtitle text (duration=%.1fs)", duration)
+
+        if not text or not text.strip():
+            return []
+
+        # Simple sentence splitting
+        import re
+
+        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            return []
+
+        if len(sentences) == 1:
+            return [Segment(start=0.0, end=duration, text=sentences[0])]
+
+        # Distribute sentences proportionally across the duration
+        segments = []
+        segment_duration = duration / len(sentences)
+        for i, sentence in enumerate(sentences):
+            start = i * segment_duration
+            end = (i + 1) * segment_duration
+            segments.append(Segment(start=start, end=end, text=sentence))
+
+        logger.info("Created %d segments from subtitle text", len(segments))
+        return segments

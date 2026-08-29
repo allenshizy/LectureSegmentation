@@ -69,7 +69,13 @@ on your connection; everything is cached afterwards (`~/.ollama`, `~/.cache/hugg
 trained STB checkpoints (`transformer.pt`, `detector.pt`) already ship in [app/checkpoints/](app/checkpoints/),
 so no extra download/training is needed for segmentation itself.
 
-Open the printed local URL(By default it's 127.0.0.1:7860. If the cli is not giving results, sometimes it's just lagging, you can just enter the url), paste a local audio/video file path, and run the pipeline.
+Open the printed local URL(By default it's 127.0.0.1:7860. If the cli is not giving results, sometimes it's just lagging, you can just enter the url), and either:
+- Paste a **local audio/video file path** (e.g., `/path/to/lecture.mp4`)
+- Paste a **YouTube URL** (e.g., `https://www.youtube.com/watch?v=VIDEO_ID`)
+
+The app will automatically:
+- For YouTube URLs: check the video license, extract subtitles if available (skipping Whisper), or download audio and run Whisper if no subtitles exist.
+- For local files: run the standard Whisper → STB → Qwen pipeline.
 
 The pipeline may take about 7-20 min to process a lecture of 30-90 min. Most of the time is used for whisper, segmentation and generation usually only takes 1-2 min.
 

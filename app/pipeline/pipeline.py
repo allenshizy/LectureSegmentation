@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import platform
+import re
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,10 +14,12 @@ from app.config import AppConfig
 from app.pipeline.asr import Segment, WhisperTranscriber
 from app.pipeline.llm import OllamaClient
 from app.pipeline.segmentation import StbSegmenter
+from app.pipeline.youtube import YouTubeInfo, download_youtube_audio, get_youtube_info
 
 logger = logging.getLogger(__name__)
 
 SEGMENTED_ARTIFACTS_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "segmented"
+YOUTUBE_AUDIO_CACHE_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "youtube_audio_cache"
 
 
 @dataclass
@@ -33,6 +37,8 @@ class Chapter:
 class PipelineResult:
     chapters: list[Chapter]
     course_summary: str | None = None
+    youtube_info: YouTubeInfo | None = None
+    subtitle_used: bool = False
 
 
 def _group_into_chapters(segments: list[Segment], boundary_times: list[float]) -> list[Chapter]:
@@ -70,6 +76,65 @@ class SegmentationPipeline:
         self.segmenter = StbSegmenter(self.config.stb)
         self.llm = OllamaClient(self.config.ollama)
 
+    @staticmethod
+    def _is_youtube_url(url_or_path: str) -> bool:
+        """Check if the input is a YouTube URL."""
+        youtube_patterns = [
+            r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=",
+            r"(?:https?:\/\/)?(?:www\.)?youtu\.be\/",
+            r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/playlist\?list=",
+        ]
+        return any(re.search(pattern, str(url_or_path)) for pattern in youtube_patterns)
+
+    def _handle_youtube(self, url: str, describe_chapters: bool = True) -> tuple[Path, YouTubeInfo, bool]:
+        """Handle YouTube URL: check license, extract subtitles, download audio if needed.
+        
+        Returns:
+            (audio_path, youtube_info, subtitle_used)
+        """
+        logger.info("Processing YouTube URL: %s", url)
+
+        # Get YouTube video info
+        yt_info = get_youtube_info(url)
+        logger.info(
+            "YouTube video info: title=%s, duration=%.1fs, license=%s (allowed=%s), "
+            "has_subtitles=%s (type=%s)",
+            yt_info.title,
+            yt_info.duration,
+            yt_info.license_info or "None",
+            yt_info.license_allowed,
+            yt_info.has_subtitles,
+            yt_info.subtitle_type,
+        )
+
+        if not yt_info.license_allowed:
+            logger.warning(
+                "Video license is not CC-BY or other creative license: %s",
+                yt_info.license_info or "None",
+            )
+
+        subtitle_used = False
+
+        # If subtitles are available, we can use them instead of Whisper
+        if yt_info.has_subtitles and yt_info.subtitle_content:
+            logger.info("Subtitles found (%s), will skip Whisper ASR", yt_info.subtitle_type)
+            subtitle_used = True
+            # We don't need to download audio, segments will be created from subtitles
+            # Return a dummy path
+            return Path(f"youtube://{yt_info.video_id}"), yt_info, subtitle_used
+
+        # If no subtitles, download audio
+        YOUTUBE_AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        audio_path = YOUTUBE_AUDIO_CACHE_DIR / f"{yt_info.video_id}.wav"
+
+        if audio_path.exists():
+            logger.info("Using cached YouTube audio: %s", audio_path)
+        else:
+            logger.info("Downloading YouTube audio to %s", audio_path)
+            audio_path = download_youtube_audio(url, audio_path)
+
+        return audio_path, yt_info, subtitle_used
+
     def _save_result(
         self,
         audio_path: str | Path,
@@ -78,22 +143,44 @@ class SegmentationPipeline:
         describe_chapters: bool,
         duration_seconds: float,
     ) -> Path:
-        source = Path(audio_path).resolve()
+        if result.youtube_info:
+            source_file = str(audio_path)
+            artifact_stem = f"youtube_{result.youtube_info.video_id}"
+        else:
+            source = Path(audio_path).resolve()
+            source_file = str(source)
+            artifact_stem = source.stem
         timestamp = datetime.now(timezone.utc)
+        
+        # Include YouTube info if available
+        youtube_metadata = None
+        if result.youtube_info:
+            youtube_metadata = {
+                "video_id": result.youtube_info.video_id,
+                "title": result.youtube_info.title,
+                "duration": result.youtube_info.duration,
+                "license_info": result.youtube_info.license_info,
+                "license_allowed": result.youtube_info.license_allowed,
+                "has_subtitles": result.youtube_info.has_subtitles,
+                "subtitle_type": result.youtube_info.subtitle_type,
+                "subtitle_used": result.subtitle_used,
+            }
+        
         artifact = {
             "summary": {
                 "created_at": timestamp.isoformat(),
-                "source_file": str(source),
+                "source_file": source_file,
                 "duration_seconds": round(duration_seconds, 3),
                 "generate_descriptions": describe_chapters,
                 "chapter_count": len(result.chapters),
+                "youtube_metadata": youtube_metadata,
                 "models": {
                     "asr": {
-                        "name": "faster-whisper",
-                        "model": self.config.whisper.model_size,
-                        "device": self.config.whisper.device,
-                        "compute_type": self.config.whisper.compute_type,
-                        "language": self.config.whisper.language,
+                        "name": "faster-whisper" if not result.subtitle_used else "youtube-subtitles",
+                        "model": self.config.whisper.model_size if not result.subtitle_used else None,
+                        "device": self.config.whisper.device if not result.subtitle_used else None,
+                        "compute_type": self.config.whisper.compute_type if not result.subtitle_used else None,
+                        "language": self.config.whisper.language if not result.subtitle_used else None,
                     },
                     "segmentation": {
                         "name": "STB",
@@ -128,7 +215,7 @@ class SegmentationPipeline:
             ],
         }
         SEGMENTED_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-        output_path = SEGMENTED_ARTIFACTS_DIR / f"{source.stem}_{timestamp:%Y%m%dT%H%M%S%fZ}.json"
+        output_path = SEGMENTED_ARTIFACTS_DIR / f"{artifact_stem}_{timestamp:%Y%m%dT%H%M%S%fZ}.json"
         output_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         logger.info("Saved segmentation result to %s", output_path)
         return output_path
@@ -136,7 +223,29 @@ class SegmentationPipeline:
     def run(self, audio_path: str | Path, describe_chapters: bool = True) -> PipelineResult:
         logger.info("Segmentation pipeline started for %s", audio_path)
         started_at = time.perf_counter()
-        segments = self.transcriber.transcribe(audio_path)
+        
+        # Handle YouTube URL
+        youtube_info = None
+        subtitle_used = False
+        audio_for_transcription = audio_path
+        
+        if self._is_youtube_url(str(audio_path)):
+            logger.info("Detected YouTube URL, processing...")
+            audio_for_transcription, youtube_info, subtitle_used = self._handle_youtube(
+                str(audio_path), describe_chapters
+            )
+        
+        # Transcription: either from subtitles or Whisper
+        if subtitle_used and youtube_info and youtube_info.subtitle_content:
+            logger.info("Using extracted subtitles instead of Whisper ASR")
+            segments = WhisperTranscriber.segments_from_text(
+                youtube_info.subtitle_content,
+                youtube_info.duration
+            )
+        else:
+            logger.info("Using Whisper for ASR transcription")
+            segments = self.transcriber.transcribe(audio_for_transcription)
+        
         boundary_times = self.segmenter.predict_boundaries(segments)
         chapters = _group_into_chapters(segments, boundary_times)
         logger.info("Grouped %d segments into %d chapters", len(segments), len(chapters))
@@ -166,7 +275,12 @@ class SegmentationPipeline:
             else:
                 logger.warning("Skipping course overview because no chapter summaries were generated")
 
-        result = PipelineResult(chapters=chapters, course_summary=course_summary)
+        result = PipelineResult(
+            chapters=chapters,
+            course_summary=course_summary,
+            youtube_info=youtube_info,
+            subtitle_used=subtitle_used
+        )
         duration_seconds = time.perf_counter() - started_at
         artifact_path = self._save_result(
             audio_path,

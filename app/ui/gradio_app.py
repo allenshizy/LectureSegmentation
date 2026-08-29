@@ -22,36 +22,78 @@ def _format_time(seconds: float) -> str:
 def build_app(config: AppConfig | None = None) -> gr.Blocks:
     pipeline = SegmentationPipeline(config)
 
-    def run_pipeline(file_path: str, describe_chapters: bool):
-        if not file_path:
-            raise gr.Error("Please provide a local audio/video file path.")
-        source = Path(file_path).expanduser()
-        if not source.is_file():
-            raise gr.Error(f"File not found: {source}")
-        logger.info(
-            "Pipeline request received: file=%s, generate_descriptions=%s",
-            source,
-            describe_chapters,
-        )
-        try:
-            result = pipeline.run(source, describe_chapters=describe_chapters)
-        except Exception as exc:
-            logger.exception("Pipeline failed for %s", source)
-            raise gr.Error(f"Pipeline failed: {exc}") from exc
+    def run_pipeline(input_source: str, describe_chapters: bool):
+        if not input_source:
+            raise gr.Error("Please provide either a YouTube URL or local audio/video file path.")
+        
+        # Check if input is a YouTube URL
+        is_youtube = pipeline._is_youtube_url(input_source)
+        
+        if is_youtube:
+            logger.info(
+                "Pipeline request received: youtube_url=%s, generate_descriptions=%s",
+                input_source,
+                describe_chapters,
+            )
+            try:
+                result = pipeline.run(input_source, describe_chapters=describe_chapters)
+                
+                # Add YouTube info to the output
+                youtube_status = ""
+                if result.youtube_info:
+                    yt_info = result.youtube_info
+                    license_status = "✓ CC-BY compatible" if yt_info.license_allowed else "✗ Non-CC-BY license"
+                    subtitle_status = f"{yt_info.subtitle_type} subtitles available"
+                    
+                    youtube_status = (
+                        f"\n\n**YouTube Video Info:**\n"
+                        f"- Title: {yt_info.title}\n"
+                        f"- Duration: {_format_time(yt_info.duration)}\n"
+                        f"- License: {yt_info.license_info or 'Not specified'} ({license_status})\n"
+                        f"- Subtitles: {subtitle_status if yt_info.has_subtitles else 'None found'}\n"
+                    )
+                    
+                    if result.subtitle_used:
+                        youtube_status += "- **ASR Method: YouTube Subtitles (Whisper skipped)**\n"
+                    else:
+                        youtube_status += "- **ASR Method: Whisper (No subtitles, audio downloaded)**\n"
+            except Exception as exc:
+                logger.exception("Pipeline failed for YouTube URL %s", input_source)
+                raise gr.Error(f"Pipeline failed: {exc}") from exc
+        else:
+            # Local file
+            source = Path(input_source).expanduser()
+            if not source.is_file():
+                raise gr.Error(f"File not found: {source}")
+            logger.info(
+                "Pipeline request received: file=%s, generate_descriptions=%s",
+                source,
+                describe_chapters,
+            )
+            try:
+                result = pipeline.run(source, describe_chapters=describe_chapters)
+                youtube_status = ""
+            except Exception as exc:
+                logger.exception("Pipeline failed for %s", source)
+                raise gr.Error(f"Pipeline failed: {exc}") from exc
+        
         logger.info("Pipeline request finished: produced %d chapters", len(result.chapters))
-        overview = result.course_summary or "Course overview was not generated. Check the terminal log for Qwen errors."
+        overview = (result.course_summary or "Course overview was not generated. Check the terminal log for Qwen errors.") + youtube_status
         return result.chapters, overview
 
     with gr.Blocks(title="Lecture Segmentation Pipeline") as demo:
-        gr.Markdown("# Lecture Segmentation Pipeline\nWhisper (ASR) -> STB (boundary detection) -> Qwen via Ollama (title/keywords/summary)")
+        gr.Markdown("# Lecture Segmentation Pipeline\nWhisper (ASR) → STB (boundary detection) → Qwen via Ollama (title/keywords/summary)\n\n**Now with YouTube support!** Just paste a YouTube URL or local file path.")
         with gr.Row():
-            file_path = gr.Textbox(label="Local audio/video file path", placeholder="/path/to/lecture.mp4")
+            input_source = gr.Textbox(
+                label="YouTube URL or local audio/video file path",
+                placeholder="https://www.youtube.com/watch?v=... or /path/to/lecture.mp4"
+            )
             describe_chapters = gr.Checkbox(label="Generate title/keywords/summary with Qwen", value=True)
         run_button = gr.Button("Run pipeline", variant="primary")
         course_overview = gr.Textbox(
-            label="Course overview",
-            lines=5,
-            max_lines=8,
+            label="Course overview & Video info",
+            lines=8,
+            max_lines=15,
             interactive=False,
         )
         gr.Markdown("## Detected chapters\nClick a chapter to expand its keywords, summary, and full transcript.")
@@ -81,7 +123,7 @@ def build_app(config: AppConfig | None = None) -> gr.Blocks:
 
         run_button.click(
             fn=run_pipeline,
-            inputs=[file_path, describe_chapters],
+            inputs=[input_source, describe_chapters],
             outputs=[chapters_state, course_overview],
         )
 
