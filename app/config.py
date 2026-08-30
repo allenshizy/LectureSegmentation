@@ -21,7 +21,7 @@ class STBConfig:
     detector_checkpoint: Path = REPO_ROOT / "app/checkpoints/detector.pt"
     device: str = "auto"
     threshold: float = 0.75  # calibrated in artifacts/pretrained_mix_6layer_BiLSTM/summary.json
-    local_max_window: int = 1  # +-k window used by local-max boundary decoding
+    local_max_window: int = 5  # +-k window used by local-max boundary decoding
 
 
 @dataclass
